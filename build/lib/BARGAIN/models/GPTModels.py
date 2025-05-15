@@ -61,59 +61,6 @@ class OpenAIProxy(Proxy):
             api_key=os.environ.get("OPENAI_API_KEY"),
         )
 
-
-# logprobs_data = {
-#     "tokens": ["The", " capital", " of", " France", " is", " Paris", "."],
-#     "token_logprobs": [-0.01, -0.02, -0.03, -0.01, -0.02, -0.05, -0.1],
-#     "top_logprobs": [
-#         {"The": -0.01, "A": -0.7},
-#         {" capital": -0.02, " city": -0.6},
-#         {" of": -0.03, " for": -1.2},
-#         {" France": -0.01, " Germany": -1.5},
-#         {" is": -0.02, " was": -1.0},
-#         {" Paris": -0.05, " Lyon": -1.2},
-#         {".": -0.1, "!": -2.0}
-#     ]
-# }
-
-
-    def determine_multi_step_classifier(self, s):
-        return len(s.strip().split()) > 1
-
-    def classifiers_proxy_func(self, data_record, classifiers):
-        # example classifiers array: ["Cat", "Dog", "Tiger", "Tiger Shark"]
-        classifier_output = []
-        for classifier in classifiers:
-            classifier_output.append({classifier: {"confidence_score": 0}})
-        task_with_data = self.task.format(data_record)
-        prompt = [
-            {"role": "system", "content": "You are a helpful assistant that is good at processing data."},
-            {"role": "user", "content": task_with_data}
-        ]
-        response = self.client.beta.chat.completions.parse(
-            model=self.model, messages=prompt, logprobs=True, seed=0, temperature=0, max_tokens=2, top_logprobs=10)
-        res = response.choices[0].message.content
-        logprobs = response.choices[0].logprobs.content
-
-        # 1.) loop through all tokens for each step and see where all each classifier is mentioned
-        for element in logprobs:
-            for possible_token in element.top_logprobs:
-                matched_classifier = None
-                for c in classifiers:
-                    if (possible_token.token.startswith(c) and (not self.determine_multi_step_classifier(c))):
-                        # tiger
-                        matched_classifier = c
-                        classifier_output[c]["confidence_score"] += possible_token.logprob
-                    elif (self.determine_multi_step_classifier(c)):
-                        steps = c.strip().split()
-                        matched_classifier = steps[-1]
-                        if (possible_token.token.startswith(matched_classifier)):
-                            # tiger shark
-                            classifier_output[c]["confidence_score"] += possible_token.logprob
-                    else:
-                        continue
-        return classifier_output
-
     def proxy_func_general(self, data_record):
         task_with_data = self.task.format(data_record)
         prompt = [

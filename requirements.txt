@@ -1,0 +1,6 @@
+numpy==2.2.5
+openai==1.78.1
+pandas==2.2.3
+pydantic==2.11.4
+setuptools==49.2.1
+tqdm==4.67.1

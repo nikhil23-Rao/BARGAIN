@@ -1,0 +1,16 @@
+LICENSE
+README.md
+setup.py
+BARGAIN/__init__.py
+BARGAIN/bounds/betting_bounds.py
+BARGAIN/models/AbstractModels.py
+BARGAIN/models/GPTModels.py
+BARGAIN/process/BARGAIN_A.py
+BARGAIN/process/BARGAIN_P.py
+BARGAIN/process/BARGAIN_R.py
+BARGAIN/sampler/wor_sampler.py
+bargain.egg-info/PKG-INFO
+bargain.egg-info/SOURCES.txt
+bargain.egg-info/dependency_links.txt
+bargain.egg-info/requires.txt
+bargain.egg-info/top_level.txt

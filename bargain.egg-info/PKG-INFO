@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: bargain
+Version: 0.1.0
+Summary: BARGAIN: Guaranteed Accurate AI for Less
+Home-page: https://github.com/szeighami/BARGAIN
+Author: Sepanta Zeighami
+Author-email: zeighami@berkeley.edu
+License: MIT
+Classifier: Development Status :: 1 - Planning
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+License-File: LICENSE
+Requires-Dist: pandas
+Requires-Dist: numpy
+Requires-Dist: tqdm
+Requires-Dist: openai
+Dynamic: author
+Dynamic: author-email
+Dynamic: classifier
+Dynamic: home-page
+Dynamic: license
+Dynamic: license-file
+Dynamic: requires-dist
+Dynamic: summary
