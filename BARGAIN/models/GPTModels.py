@@ -82,6 +82,7 @@ class OpenAIProxy(Proxy):
 
     def classifiers_proxy_func(self, data_record, classifiers):
         # example classifiers array: ["Cat", "Dog", "Tiger", "Tiger Shark"]
+        print("Starting")
         classifier_output = []
         for classifier in classifiers:
             classifier_output.append({classifier: {"confidence_score": 0}})
@@ -112,6 +113,7 @@ class OpenAIProxy(Proxy):
                             classifier_output[c]["confidence_score"] += possible_token.logprob
                     else:
                         continue
+        print(classifier_output)
         return classifier_output
 
     def proxy_func_general(self, data_record):
@@ -146,10 +148,16 @@ class OpenAIProxy(Proxy):
         return get_bool_val_prob(res, logprobs)
 
     def proxy_func(self, data_record):
+        print("new starting")
         if self.is_binary:
             return self.proxy_func_binary(data_record)
         else:
-            return self.proxy_func_general(data_record)
+            return self.classifiers_proxy_func(data_record, [
+                "lion", "tiger", "elephant", "giraffe", "zebra",
+                "kangaroo", "panda", "koala", "dolphin", "whale",
+                "eagle", "falcon", "bear", "wolf", "fox",
+                "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"
+            ])
 
 
 class OpenAIOracle(Oracle):
