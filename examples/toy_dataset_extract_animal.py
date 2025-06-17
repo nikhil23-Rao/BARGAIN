@@ -33,5 +33,8 @@ df['output'] = bargain.process(df['value'].to_numpy())
 
 # Evaluate output
 df['is_correct'] = df['animal_name'] == df['output']
+
+
+print(df['output'])
 print(
     f"Accuracy: {df['is_correct'].mean()}, Used Proxy: {1-oracle.get_number_preds()/len(df):.2f}")

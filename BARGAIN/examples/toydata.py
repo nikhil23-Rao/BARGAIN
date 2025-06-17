@@ -44,6 +44,28 @@ def get_bool_val_prob(res, logprobs=None):
     return False, false_prob
 
 
+class Token:
+    def __init__(self, token_string, logprob, prob, topten):
+        self.token_string = token_string
+        self.logprob = logprob
+        self.prob = prob
+        self.topten = topten
+
+    def __repr__(self):
+        return (f"Token(token_string={self.token_string!r}, "
+                f"logprob={self.logprob:.4f}, prob={self.prob:.4f}, "
+                f"topten={self.topten!r})")
+
+    def get_pij_matrix(self):
+        total = 0
+        pij_matrix = []
+        for t in self.topten:
+            total += t.prob
+        for token in self.topten:
+            pij_matrix.append((token.prob / total))
+        return pij_matrix
+
+
 class OpenAIProxy(Proxy):
     def __init__(
         self,
@@ -84,14 +106,17 @@ class OpenAIProxy(Proxy):
 #     ]
 # }
 
+
     def determine_multi_step_classifier(self, s):
         return len(s.strip().split()) > 1
 
-    def classifiers_proxy_func(self, data_record, classifiers):
-        # store final result
-        classifier_output = {}
-        for classifier in classifiers:
-            classifier_output[classifier] = {"confidence_score": 0}  # init
+    def is_valid_start(self, token, classes):
+        return any(cls.startswith(token) for cls in classes)
+
+    def class_proxy_func(self, data_record, classes):
+        prob_output = 1
+        temp = 0
+        part_denom = 0
 
         # run LLM
         task_with_data = self.task.format(data_record)
@@ -103,29 +128,45 @@ class OpenAIProxy(Proxy):
             model=self.model, messages=prompt, logprobs=True, seed=0, temperature=0, max_tokens=1002, top_logprobs=10)
         logprobs = response.choices[0].logprobs.content
 
-        # 1.) loop through all tokens for each step and see where all each classifier is mentioned
-        # 2.) Append all logprob values to corresponding classifier_key
-        # 2a.) if classifier is multiple words -> look to second token to make sure its referring to correct classifier
-        for element in logprobs:
-            for possible_token in element.top_logprobs:
-                matched_classifier = None
-                for c in classifiers:
-                    if (c.startswith(possible_token.token) and (not self.determine_multi_step_classifier(c))):
-                        # tiger
-                        matched_classifier = c
-                        print(element, possible_token)
-                        classifier_output[c]["confidence_score"] += possible_token.logprob
-                    elif (self.determine_multi_step_classifier(c)):
-                        steps = c.strip().split()
-                        matched_classifier = steps[-1]
-                        if (matched_classifier.startswith(possible_token.token)):
-                            print(possible_token)
-                            # tiger shark
-                            classifier_output[c]["confidence_score"] += possible_token.logprob
-                    else:
-                        continue
-        print(classifier_output)
-        return classifier_output
+        list_of_tokens = []
+        predicted_string = ""
+        for token_step in logprobs:
+            # Build top-10 list as Token objects
+            top_tokens = []
+
+            for entry in token_step.top_logprobs:
+                for cls in classes:
+                    if (cls.startswith(predicted_string + entry.token)):
+                        top_token = Token(
+                            entry.token,
+                            entry.logprob,
+                            np.exp(entry.logprob),
+                            None  # No nesting inside top tokens
+                        )
+                        if top_token not in top_tokens:
+                            top_tokens.append(top_token)
+
+            predicted_string += token_step.token
+
+            # Main token with nested top-10
+            t = Token(
+                token_step.token,
+                token_step.logprob,
+                np.exp(token_step.logprob),
+                top_tokens
+            )
+            list_of_tokens.append(t)
+
+        print("LIST", list_of_tokens)
+
+        for t in list_of_tokens:
+            prob_output *= t.get_pij_matrix()[0]  # multiply all p1's
+            for i, p in enumerate(t.get_pij_matrix()):
+                if i > 0:
+                    temp += p
+            part_denom += (temp * t.get_pij_matrix()[0])
+            temp = 0  # p1 * sum_of_all others -> for one step
+        print("CONFIDENCE", prob_output / (prob_output + part_denom))
 
     def proxy_func_general(self, data_record):
         task_with_data = self.task.format(data_record)
@@ -163,6 +204,7 @@ class OpenAIProxy(Proxy):
         if self.is_binary:
             return self.proxy_func_binary(data_record)
         else:
+            # hard coded classes for now
             return self.classifiers_proxy_func(data_record, [
                 "lion", "tiger", "elephant", "giraffe", "zebra",
                 "kangaroo", "panda", "koala", "dolphin", "whale",
@@ -467,7 +509,7 @@ def generate_color_or_animal_data(n, animal_prop, hard_prop, misleading_text_len
 
 # Define Data and Task
 df = generate_color_or_animal_data(
-    n=100, animal_prop=1, hard_prop=0.5, misleading_text_length=600)
+    n=1, animal_prop=0.7, hard_prop=0.5, misleading_text_length=600)
 task = ''' 
         I will give you a text. Your task is to extract the name of the animal mentioned is the text.
 
@@ -475,6 +517,9 @@ task = '''
 
         You must respond with ONLY the name of the animal:
         '''
+
+print(df)
+
 
 # Define oracle and proxy
 proxy = OpenAIProxy(task, model='gpt-4o-mini')
@@ -485,7 +530,8 @@ oracle = OpenAIOracle(task, model='gpt-4o')
 print("starting process")
 
 bargain = BARGAIN_A(proxy, oracle, target=0.9,  delta=0.1, seed=0)
-print(proxy.classifiers_proxy_func(df['value'].to_numpy(), [
+# print(proxy.proxy_func_general(df['value'].to_numpy()))
+print(proxy.class_proxy_func(df['value'].to_numpy(), [
     "lion", "tiger", "elephant", "giraffe", "zebra",
     "kangaroo", "panda", "koala", "dolphin", "whale",
                 "eagle", "falcon", "bear", "wolf", "fox",
@@ -493,7 +539,7 @@ print(proxy.classifiers_proxy_func(df['value'].to_numpy(), [
 ]))
 # df['output'] = bargain.process(df['value'].to_numpy())
 
-# # Evaluate output
+# Evaluate output
 # df['is_correct'] = df['animal_name'] == df['output']
 # print(
 #     f"Accuracy: {df['is_correct'].mean()}, Used Proxy: {1-oracle.get_number_preds()/len(df):.2f}")

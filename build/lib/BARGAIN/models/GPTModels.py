@@ -19,6 +19,11 @@ def get_bool_val_prob(res, logprobs=None):
             output = True
         return output
 
+
+# classifier {"lion": 0129e12.22, "cat": -1222}
+# lion + cat
+# np.explion / lion + cat
+
     true_prob = 0
     false_prob = 0
     for toplogprob in logprobs[0].top_logprobs:
@@ -75,7 +80,6 @@ class OpenAIProxy(Proxy):
 #         {".": -0.1, "!": -2.0}
 #     ]
 # }
-
 
     def determine_multi_step_classifier(self, s):
         return len(s.strip().split()) > 1
