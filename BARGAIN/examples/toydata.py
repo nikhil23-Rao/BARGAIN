@@ -44,7 +44,7 @@ def get_bool_val_prob(res, logprobs=None):
     return False, false_prob
 
 
-class Token:
+class TokenStep:
     def __init__(self, token_string, logprob, prob, topten):
         self.token_string = token_string
         self.logprob = logprob
@@ -52,11 +52,9 @@ class Token:
         self.topten = topten
 
     def __repr__(self):
-        return (f"Token(token_string={self.token_string!r}, "
-                f"logprob={self.logprob:.4f}, prob={self.prob:.4f}, "
-                f"topten={self.topten!r})")
+        return (f"top_ten={[repr(t) for t in self.topten]},")
 
-    def get_pij_matrix(self):
+    def get_normalized_top_ten_probs(self):
         total = 0
         pij_matrix = []
         for t in self.topten:
@@ -64,6 +62,16 @@ class Token:
         for token in self.topten:
             pij_matrix.append((token.prob / total))
         return pij_matrix
+
+
+class Token:
+    def __init__(self, token_string, logprob, prob):
+        self.token_string = token_string
+        self.logprob = logprob
+        self.prob = prob
+
+    def __repr__(self):
+        return (f"str={self.token_string} + prob={self.prob:.4f},")
 
 
 class OpenAIProxy(Proxy):
@@ -91,33 +99,13 @@ class OpenAIProxy(Proxy):
             api_key=os.environ.get("OPENAI_API_KEY"),
         )
 
-
-# logprobs_data = {
-#     "tokens": ["The", " capital", " of", " France", " is", " Paris", "."],
-#     "token_logprobs": [-0.01, -0.02, -0.03, -0.01, -0.02, -0.05, -0.1],
-#     "top_logprobs": [
-#         {"The": -0.01, "A": -0.7},
-#         {" capital": -0.02, " city": -0.6},
-#         {" of": -0.03, " for": -1.2},
-#         {" France": -0.01, " Germany": -1.5},
-#         {" is": -0.02, " was": -1.0},
-#         {" Paris": -0.05, " Lyon": -1.2},
-#         {".": -0.1, "!": -2.0}
-#     ]
-# }
-
-
     def determine_multi_step_classifier(self, s):
         return len(s.strip().split()) > 1
 
     def is_valid_start(self, token, classes):
         return any(cls.startswith(token) for cls in classes)
 
-    def class_proxy_func(self, data_record, classes):
-        prob_output = 1
-        temp = 0
-        part_denom = 0
-
+    def retrieveLLMResponse(self, data_record):
         # run LLM
         task_with_data = self.task.format(data_record)
         prompt = [
@@ -126,47 +114,60 @@ class OpenAIProxy(Proxy):
         ]
         response = self.client.beta.chat.completions.parse(
             model=self.model, messages=prompt, logprobs=True, seed=0, temperature=0, max_tokens=1002, top_logprobs=10)
+        return response
+
+    def is_valid_prefix(self, prefix, classes):
+        for cls in classes:
+            if (cls.startswith(prefix)):
+                return True
+        return False
+
+    def class_proxy_func(self, data_record, classes):
+        list_of_token_steps = []
+        predicted_string = ""
+
+        response = self.retrieveLLMResponse(data_record=data_record)
         logprobs = response.choices[0].logprobs.content
 
-        list_of_tokens = []
-        predicted_string = ""
         for token_step in logprobs:
             # Build top-10 list as Token objects
-            top_tokens = []
-
+            top_available_tokens = []
             for entry in token_step.top_logprobs:
-                for cls in classes:
-                    if (cls.startswith(predicted_string + entry.token)):
-                        top_token = Token(
-                            entry.token,
-                            entry.logprob,
-                            np.exp(entry.logprob),
-                            None  # No nesting inside top tokens
-                        )
-                        if top_token not in top_tokens:
-                            top_tokens.append(top_token)
+                if self.is_valid_prefix(predicted_string + entry.token, classes):
+                    top_available_tokens.append(Token(
+                        entry.token,
+                        entry.logprob,
+                        np.exp(entry.logprob),
+                    ))
 
             predicted_string += token_step.token
 
             # Main token with nested top-10
-            t = Token(
+            t = TokenStep(
                 token_step.token,
                 token_step.logprob,
                 np.exp(token_step.logprob),
-                top_tokens
+                top_available_tokens
             )
-            list_of_tokens.append(t)
 
-        print("LIST", list_of_tokens)
+            list_of_token_steps.append(t)
 
-        for t in list_of_tokens:
-            prob_output *= t.get_pij_matrix()[0]  # multiply all p1's
-            for i, p in enumerate(t.get_pij_matrix()):
-                if i > 0:
-                    temp += p
-            part_denom += (temp * t.get_pij_matrix()[0])
-            temp = 0  # p1 * sum_of_all others -> for one step
+        print(list_of_token_steps)
+
+        for t in list_of_token_steps:
+            for t1 in t.topten:
+                print(t1)
+
+        prob_output = 1
+        part_denom = 0
+        for step in list_of_token_steps:
+            sum_of_available_top_ten = np.sum(
+                step.get_normalized_top_ten_probs()[1:])
+            part_denom += (sum_of_available_top_ten * prob_output)
+            prob_output *= step.get_normalized_top_ten_probs()[0]
+
         print("CONFIDENCE", prob_output / (prob_output + part_denom))
+        return response.choices[0].message.content, prob_output / (prob_output + part_denom)
 
     def proxy_func_general(self, data_record):
         task_with_data = self.task.format(data_record)
@@ -205,12 +206,10 @@ class OpenAIProxy(Proxy):
             return self.proxy_func_binary(data_record)
         else:
             # hard coded classes for now
-            return self.classifiers_proxy_func(data_record, [
-                "lion", "tiger", "elephant", "giraffe", "zebra",
-                "kangaroo", "panda", "koala", "dolphin", "whale",
-                "eagle", "falcon", "bear", "wolf", "fox",
-                "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"
-            ])
+            return self.class_proxy_func(data_record,  ["lion", "tiger", "elephant", "giraffe", "zebra",
+                                         "kangaroo", "panda", "koala", "dolphin", "whale",
+                                                        "eagle", "falcon", "bear", "wolf", "fox",
+                                                        "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"])
 
 
 class OpenAIOracle(Oracle):
@@ -465,11 +464,12 @@ def generate_color_or_animal_data(n, animal_prop, hard_prop, misleading_text_len
                 "violet", "gold", "silver", "beige", "maroon"
     ]
     animals = [
-        "lion", "tiger", "elephant", "giraffe", "zebra",
+        "lion", "tiger", "elephant", "zebra", "giraffe",
                 "kangaroo", "panda", "koala", "dolphin", "whale",
                 "eagle", "falcon", "bear", "wolf", "fox",
                 "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"
     ]
+    np.random.shuffle(animals)
     long_misleading_text = '''Color theory is a conceptual framework used in visual arts, design, and many areas of visual communication to understand how colors relate to each other and how they can be combined to create pleasing or effective compositions. Rooted in both science and aesthetics, color theory explores the nature of color, the psychological impact it has on viewers, and the ways in which different colors interact. It informs countless decisions in fields ranging from painting and graphic design to interior decoration, fashion, marketing, and branding.
 
                     At the heart of color theory lies the color wheel, a circular diagram of colors arranged according to their chromatic relationship. The first known color wheel was developed by Sir Isaac Newton in the 17th century, who demonstrated that white light could be split into a spectrum of colors and then recombined into white light. His color circle laid the groundwork for modern color theory.
@@ -504,12 +504,14 @@ def generate_color_or_animal_data(n, animal_prop, hard_prop, misleading_text_len
             val = long_misleading_text[:len(
                 long_misleading_text)//2] + f" {val} " + long_misleading_text[len(long_misleading_text)//2:]
         data['value'].append(val)
+    print(data)
     return pd.DataFrame.from_dict(data)
 
 
 # Define Data and Task
 df = generate_color_or_animal_data(
-    n=1, animal_prop=0.7, hard_prop=0.5, misleading_text_length=600)
+    n=100, animal_prop=1, hard_prop=1, misleading_text_length=600)
+
 task = ''' 
         I will give you a text. Your task is to extract the name of the animal mentioned is the text.
 
@@ -531,15 +533,15 @@ print("starting process")
 
 bargain = BARGAIN_A(proxy, oracle, target=0.9,  delta=0.1, seed=0)
 # print(proxy.proxy_func_general(df['value'].to_numpy()))
-print(proxy.class_proxy_func(df['value'].to_numpy(), [
-    "lion", "tiger", "elephant", "giraffe", "zebra",
-    "kangaroo", "panda", "koala", "dolphin", "whale",
-                "eagle", "falcon", "bear", "wolf", "fox",
-                "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"
-]))
-# df['output'] = bargain.process(df['value'].to_numpy())
+# print(proxy.class_proxy_func(df['value'].to_numpy(), [
+#     "lion", "tiger", "elephant", "giraffe", "zebra",
+#     "kangaroo", "panda", "koala", "dolphin", "whale",
+#                 "eagle", "falcon", "bear", "wolf", "fox",
+#                 "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"
+# ]))
+df['output'] = bargain.process(df['value'].to_numpy())
 
 # Evaluate output
-# df['is_correct'] = df['animal_name'] == df['output']
-# print(
-#     f"Accuracy: {df['is_correct'].mean()}, Used Proxy: {1-oracle.get_number_preds()/len(df):.2f}")
+df['is_correct'] = df['animal_name'] == df['output']
+print(
+    f"Accuracy: {df['is_correct'].mean()}, Used Proxy: {1-oracle.get_number_preds()/len(df):.2f}")
