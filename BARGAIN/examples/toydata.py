@@ -57,7 +57,7 @@ class TokenStep:
     def get_normalized_top_ten_probs(self):
         total = 0
         pij_matrix = []
-        for t in self.topten:
+        for t in self.topten:  # use np
             total += t.prob
         for token in self.topten:
             pij_matrix.append((token.prob / total))
@@ -105,7 +105,7 @@ class OpenAIProxy(Proxy):
     def is_valid_start(self, token, classes):
         return any(cls.startswith(token) for cls in classes)
 
-    def retrieveLLMResponse(self, data_record):
+    def retrieve_llm_response(self, data_record):
         # run LLM
         task_with_data = self.task.format(data_record)
         prompt = [
@@ -116,33 +116,57 @@ class OpenAIProxy(Proxy):
             model=self.model, messages=prompt, logprobs=True, seed=0, temperature=0, max_tokens=1002, top_logprobs=10)
         return response
 
-    def is_valid_prefix(self, prefix, classes):
+    def is_valid_prefix(self, prefix, classes,):
         for cls in classes:
-            if (cls.startswith(prefix)):
-                return True
+            if (cls.replace(" ", "").lower().startswith(prefix.replace(" ", "").lower())):
+                return True  # stop checking rest of classes since at least one works
         return False
+
+    def is_valid_unique_token(self, prefix, classes, predicted_class, current_step_in_prediction):
+        pos = len(current_step_in_prediction)
+        if not predicted_class.startswith(prefix, pos):
+            return False
+        for cls in classes:
+            if cls == predicted_class:
+                continue
+            if cls.startswith(prefix, pos):
+                return False
+
+        return True
 
     def class_proxy_func(self, data_record, classes):
         list_of_token_steps = []
         predicted_string = ""
 
-        response = self.retrieveLLMResponse(data_record=data_record)
+        # Call LLM
+        response = self.retrieve_llm_response(data_record=data_record)
+        print("predicted class", response.choices[0].message.content)
         logprobs = response.choices[0].logprobs.content
 
         for token_step in logprobs:
             # Build top-10 list as Token objects
             top_available_tokens = []
-            for entry in token_step.top_logprobs:
-                if self.is_valid_prefix(predicted_string + entry.token, classes):
+            top_available_tokens.append(Token(
+                token_step.token,
+                token_step.logprob,
+                np.exp(token_step.logprob),
+            ))
+            for possible_token in token_step.top_logprobs:
+                # is_valid_prefix:
+                # 1.) first arg -> prefix being checked
+                # 2.) second arg -> list of classes to check against
+                if not self.is_valid_prefix(predicted_string + possible_token.token, classes):
+                    print("current step", predicted_string)
+                    print("sus", possible_token.token)
                     top_available_tokens.append(Token(
-                        entry.token,
-                        entry.logprob,
-                        np.exp(entry.logprob),
+                        possible_token.token,
+                        possible_token.logprob,
+                        np.exp(possible_token.logprob),
                     ))
 
             predicted_string += token_step.token
 
-            # Main token with nested top-10
+            # create step with updated data
             t = TokenStep(
                 token_step.token,
                 token_step.logprob,
@@ -150,24 +174,26 @@ class OpenAIProxy(Proxy):
                 top_available_tokens
             )
 
+            # store all token_steps for future iteration
             list_of_token_steps.append(t)
 
-        print(list_of_token_steps)
-
+        # Run Algorithm
         for t in list_of_token_steps:
             for t1 in t.topten:
                 print(t1)
-
-        prob_output = 1
+        prob_output = 1  # numerator
         part_denom = 0
         for step in list_of_token_steps:
             sum_of_available_top_ten = np.sum(
+                # sum of all not_removed probs where i>1
                 step.get_normalized_top_ten_probs()[1:])
+            # sum * (product of all p1s to k)
             part_denom += (sum_of_available_top_ten * prob_output)
-            prob_output *= step.get_normalized_top_ten_probs()[0]
+            prob_output *= step.get_normalized_top_ten_probs()[0]  # p1
 
+        confidence = prob_output / (prob_output + part_denom)  # formula
         print("CONFIDENCE", prob_output / (prob_output + part_denom))
-        return response.choices[0].message.content, prob_output / (prob_output + part_denom)
+        return response.choices[0].message.content, confidence
 
     def proxy_func_general(self, data_record):
         task_with_data = self.task.format(data_record)
@@ -186,6 +212,7 @@ class OpenAIProxy(Proxy):
                 all_logprobs += t.logprob
             prob = np.exp(all_logprobs)
 
+        print("CONFIDENCE", prob)
         return response.choices[0].message.content, prob
 
     def proxy_func_binary(self, data_record):
@@ -206,6 +233,7 @@ class OpenAIProxy(Proxy):
             return self.proxy_func_binary(data_record)
         else:
             # hard coded classes for now
+            # return self.proxy_func_general(data_record)
             return self.class_proxy_func(data_record,  ["lion", "tiger", "elephant", "giraffe", "zebra",
                                          "kangaroo", "panda", "koala", "dolphin", "whale",
                                                         "eagle", "falcon", "bear", "wolf", "fox",
@@ -510,7 +538,7 @@ def generate_color_or_animal_data(n, animal_prop, hard_prop, misleading_text_len
 
 # Define Data and Task
 df = generate_color_or_animal_data(
-    n=100, animal_prop=1, hard_prop=1, misleading_text_length=600)
+    n=100, animal_prop=1, hard_prop=1, misleading_text_length=300)
 
 task = ''' 
         I will give you a text. Your task is to extract the name of the animal mentioned is the text.
@@ -532,13 +560,6 @@ oracle = OpenAIOracle(task, model='gpt-4o')
 print("starting process")
 
 bargain = BARGAIN_A(proxy, oracle, target=0.9,  delta=0.1, seed=0)
-# print(proxy.proxy_func_general(df['value'].to_numpy()))
-# print(proxy.class_proxy_func(df['value'].to_numpy(), [
-#     "lion", "tiger", "elephant", "giraffe", "zebra",
-#     "kangaroo", "panda", "koala", "dolphin", "whale",
-#                 "eagle", "falcon", "bear", "wolf", "fox",
-#                 "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"
-# ]))
 df['output'] = bargain.process(df['value'].to_numpy())
 
 # Evaluate output
