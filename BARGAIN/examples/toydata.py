@@ -1,6 +1,7 @@
 
 import numpy as np
 import pandas as pd
+import random
 from typing import List, Union, Tuple
 
 from BARGAIN.sampler.wor_sampler import WoR_Sampler
@@ -116,11 +117,17 @@ class OpenAIProxy(Proxy):
             model=self.model, messages=prompt, logprobs=True, seed=0, temperature=0, max_tokens=1002, top_logprobs=10)
         return response
 
-    def is_valid_prefix(self, prefix, classes,):
+    def is_valid_prefix(self, prefix, classes, predicted_class, token_step):
+        bool = False
+        list_of_matches = []
         for cls in classes:
             if (cls.replace(" ", "").lower().startswith(prefix.replace(" ", "").lower())):
-                return True  # stop checking rest of classes since at least one works
-        return False
+                list_of_matches.append(cls)
+              # stop checking rest of classes since at least one works
+        for c in list_of_matches:
+            if c.lower().replace(" ", "") != predicted_class.lower().replace(" ", ""):
+                bool = True
+        return bool
 
     def is_valid_unique_token(self, prefix, classes, predicted_class, current_step_in_prediction):
         pos = len(current_step_in_prediction)
@@ -140,7 +147,6 @@ class OpenAIProxy(Proxy):
 
         # Call LLM
         response = self.retrieve_llm_response(data_record=data_record)
-        print("predicted class", response.choices[0].message.content)
         logprobs = response.choices[0].logprobs.content
 
         for token_step in logprobs:
@@ -151,13 +157,11 @@ class OpenAIProxy(Proxy):
                 token_step.logprob,
                 np.exp(token_step.logprob),
             ))
-            for possible_token in token_step.top_logprobs:
+            for possible_token in token_step.top_logprobs[1:]:
                 # is_valid_prefix:
                 # 1.) first arg -> prefix being checked
                 # 2.) second arg -> list of classes to check against
-                if not self.is_valid_prefix(predicted_string + possible_token.token, classes):
-                    print("current step", predicted_string)
-                    print("sus", possible_token.token)
+                if self.is_valid_prefix(predicted_string + possible_token.token, classes, response.choices[0].message.content, token_step):
                     top_available_tokens.append(Token(
                         possible_token.token,
                         possible_token.logprob,
@@ -178,9 +182,6 @@ class OpenAIProxy(Proxy):
             list_of_token_steps.append(t)
 
         # Run Algorithm
-        for t in list_of_token_steps:
-            for t1 in t.topten:
-                print(t1)
         prob_output = 1  # numerator
         part_denom = 0
         for step in list_of_token_steps:
@@ -192,7 +193,7 @@ class OpenAIProxy(Proxy):
             prob_output *= step.get_normalized_top_ten_probs()[0]  # p1
 
         confidence = prob_output / (prob_output + part_denom)  # formula
-        print("CONFIDENCE", prob_output / (prob_output + part_denom))
+        print(response.choices[0].message.content, "  ", confidence)
         return response.choices[0].message.content, confidence
 
     def proxy_func_general(self, data_record):
@@ -212,7 +213,7 @@ class OpenAIProxy(Proxy):
                 all_logprobs += t.logprob
             prob = np.exp(all_logprobs)
 
-        print("CONFIDENCE", prob)
+        print(response.choices[0].message.content, "  ", prob)
         return response.choices[0].message.content, prob
 
     def proxy_func_binary(self, data_record):
@@ -537,10 +538,10 @@ def generate_color_or_animal_data(n, animal_prop, hard_prop, misleading_text_len
 
 
 # Define Data and Task
-df = generate_color_or_animal_data(
-    n=100, animal_prop=1, hard_prop=1, misleading_text_length=300)
+# df = generate_color_or_animal_data(
+#     n=100, animal_prop=1, hard_prop=1, misleading_text_length=300)
 
-task = ''' 
+task = '''
         I will give you a text. Your task is to extract the name of the animal mentioned is the text.
 
         Here is the text: {}
@@ -548,7 +549,7 @@ task = '''
         You must respond with ONLY the name of the animal:
         '''
 
-print(df)
+# print(df)
 
 
 # Define oracle and proxy
@@ -556,13 +557,35 @@ proxy = OpenAIProxy(task, model='gpt-4o-mini')
 oracle = OpenAIOracle(task, model='gpt-4o')
 
 
-# Call BARGAIN to process
-print("starting process")
+# # Call BARGAIN to process
+# print("starting process")
 
-bargain = BARGAIN_A(proxy, oracle, target=0.9,  delta=0.1, seed=0)
-df['output'] = bargain.process(df['value'].to_numpy())
+# bargain = BARGAIN_A(proxy, oracle, target=0.9,  delta=0.1, seed=0)
+# df['output'] = bargain.process(df['value'].to_numpy())
 
-# Evaluate output
-df['is_correct'] = df['animal_name'] == df['output']
-print(
-    f"Accuracy: {df['is_correct'].mean()}, Used Proxy: {1-oracle.get_number_preds()/len(df):.2f}")
+# # Evaluate output
+# df['is_correct'] = df['animal_name'] == df['output']
+# print(
+#     f"Accuracy: {df['is_correct'].mean()}, Used Proxy: {1-oracle.get_number_preds()/len(df):.2f}")
+
+
+df = pd.read_csv("BARGAIN/examples/test3.csv")
+
+
+# df.to_csv("testcase1.csv", index=True)
+
+# # Display the first 5 rows of the new DataFrame
+for index, row in df.iterrows():
+    # Get the article text from the current row
+    current_article = row['article']
+
+    # Call the processing function with the current article.
+    # Note: We pass a single article string, not a numpy array.
+    # print(row['injected_animal'])
+    # proxy.class_proxy_func(current_article, [
+    #     "lion", "tiger", "elephant", "zebra", "giraffe",
+    #             "kangaroo", "panda", "koala", "dolphin", "whale",
+    #             "eagle", "falcon", "bear", "wolf", "fox",
+    #             "rabbit", "deer", "monkey", "hippopotamus", "rhinoceros"
+    # ])
+    proxy.proxy_func_general(current_article)
