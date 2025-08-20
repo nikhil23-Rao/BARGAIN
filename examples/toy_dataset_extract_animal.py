@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(
 
 # Define Data and Task
 df = generate_color_or_animal_data(
-    n=100, animal_prop=1, hard_prop=0.5, misleading_text_length=600)
+    n=10, animal_prop=1, hard_prop=0.5, misleading_text_length=600)
 task = ''' 
         I will give you a text. Your task is to extract the name of the animal mentioned is the text.
 
@@ -27,14 +27,17 @@ oracle = OpenAIOracle(task, model='gpt-4o')
 # Call BARGAIN to process
 print("starting process")
 
-bargain = BARGAIN_A(proxy, oracle, target=0.9,  delta=0.1, seed=0)
-# print(dir(proxy))
+bargain = BARGAIN_A(proxy, oracle, target=0.8,  delta=0.2, seed=0)
+
+print(dir(proxy))
 df['output'] = bargain.process(df['value'].to_numpy())
+
 
 # Evaluate output
 df['is_correct'] = df['animal_name'] == df['output']
 
 
+print(df)
 print(df['output'])
 print(
     f"Accuracy: {df['is_correct'].mean()}, Used Proxy: {1-oracle.get_number_preds()/len(df):.2f}")
